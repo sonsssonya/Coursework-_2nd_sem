@@ -894,7 +894,6 @@ private:
     EnergyModel model_;
     Date startDate_, endDate_;
     int totalDays_;
-    int currentDayIndex_ = 0; // индекс дня "сегодня"
     std::vector<Date> dates_;
     std::vector<int> weekDays_;
     std::vector<std::vector<Interval>> schedules_;

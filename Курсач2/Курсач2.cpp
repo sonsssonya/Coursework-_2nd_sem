@@ -12,10 +12,11 @@
 #include <ctime>
 #include <limits>
 #include <algorithm>
-#include <cctype>      // для std::tolower
-#include <locale>      // для std::locale
-#include <memory>      // для std::unique_ptr (необязательно)
+#include <cctype>
+#include <locale>
+#include <memory>
 #include <stdexcept>
+#include <cstdio>
 
 // ----------------------------------------------------------------------
 // Вспомогательные функции
@@ -24,17 +25,16 @@ inline double clamp(double val, double lo, double hi) {
     return (val < lo) ? lo : (val > hi) ? hi : val;
 }
 
-// Безопасный ввод double с поддержкой точки и запятой (использует "C" локаль)
+// Безопасный ввод double с поддержкой точки и запятой
 double inputDouble(const std::string& prompt) {
     std::string line;
     while (true) {
         std::cout << prompt;
         std::getline(std::cin, line);
         if (line.empty()) continue;
-        // Заменяем запятые на точки, чтобы istringstream с "C" локалью точно понял
         std::replace(line.begin(), line.end(), ',', '.');
         std::istringstream iss(line);
-        iss.imbue(std::locale::classic()); // фиксированная локаль, разделитель - точка
+        iss.imbue(std::locale::classic());
         double val;
         if (iss >> val && iss.eof()) {
             return val;
@@ -53,6 +53,10 @@ double timeToHours(const std::string& timeStr) {
     return h + m / 60.0;
 }
 
+// Безопасный ввод даты (день месяц)
+struct Date;
+Date inputDate(); // предварительное объявление
+
 // ----------------------------------------------------------------------
 // Структура интервала занятости
 // ----------------------------------------------------------------------
@@ -63,7 +67,6 @@ struct Interval {
 };
 
 // Ввод интервалов для одного дня (с описанием)
-// Формат: чч:мм-чч:мм описание[, чч:мм-чч:мм описание ...]
 std::vector<Interval> inputDayIntervals(const std::string& dayName) {
     std::cout << dayName << ": введите занятые интервалы с описанием,\n";
     std::cout << "  формат: ЧЧ:ММ-ЧЧ:ММ описание [, ...]\n";
@@ -76,12 +79,10 @@ std::vector<Interval> inputDayIntervals(const std::string& dayName) {
     std::stringstream ss(line);
     std::string token;
     while (std::getline(ss, token, ',')) {
-        // обрезаем пробелы
         token.erase(0, token.find_first_not_of(" \t"));
         token.erase(token.find_last_not_of(" \t") + 1);
         if (token.empty()) continue;
 
-        // разделяем по первому дефису: время-время описание
         size_t dash = token.find('-');
         if (dash == std::string::npos) {
             std::cout << "   Пропущен неверный интервал: " << token << "\n";
@@ -89,7 +90,6 @@ std::vector<Interval> inputDayIntervals(const std::string& dayName) {
         }
         std::string times = token.substr(0, dash);
         std::string rest = token.substr(dash + 1);
-        // ищем конец времени окончания (до первого пробела)
         size_t space = rest.find(' ');
         std::string endTime, desc;
         if (space == std::string::npos) {
@@ -143,7 +143,7 @@ public:
         predicted.reserve(plannedLoadHours.size());
         for (double loadHours : plannedLoadHours) {
             double u = clamp(loadHours / 24.0, 0.0, 1.0);
-            static const double dt = 1.0; // день
+            static const double dt = 1.0;
             if (u == 0.0) {
                 E = E_max_ - (E_max_ - E) * std::exp(-beta_ * dt);
             }
@@ -157,7 +157,6 @@ public:
         return predicted;
     }
 
-    // Поиск оптимального дня с учётом приоритета
     int suggestOptimalDay(double taskLoadHours, int deadlineDay,
         const std::vector<double>& plannedLoad,
         int priority = 0) {
@@ -183,11 +182,9 @@ public:
             }
             if (!feasible) continue;
 
-            // метрика: основное – минимальная энергия, затем конец периода,
-            // для срочных – чем раньше день, тем лучше (вычитаем штраф за день)
             double metric = minEnergy + 0.001 * energyAfter.back();
             if (priority > 0) {
-                metric -= 0.02 * day;   // лёгкий штраф за откладывание срочного
+                metric -= 0.02 * day;
             }
             if (metric > bestMetric) {
                 bestMetric = metric;
@@ -221,7 +218,7 @@ std::tm makeDate(int year, int month, int day) {
 std::string dateToString(const Date& d) {
     char buf[11];
     snprintf(buf, sizeof(buf), "%02d.%02d.%04d", d.day, d.month, d.year);
-    return buf;
+    return std::string(buf);
 }
 
 const char* dayOfWeekShortName(int wday) {
@@ -229,8 +226,22 @@ const char* dayOfWeekShortName(int wday) {
     return names[wday % 7];
 }
 
+Date inputDate() {
+    std::string line;
+    while (true) {
+        std::getline(std::cin, line);
+        std::istringstream iss(line);
+        int d, m;
+        if (iss >> d >> m && iss.eof()) {
+            if (d >= 1 && d <= 31 && m >= 1 && m <= 12)
+                return { 2026, m, d };
+        }
+        std::cout << "Неверная дата. Введите день и месяц (например 15 5): ";
+    }
+}
+
 // ----------------------------------------------------------------------
-// 3. Класс "Умный ежедневник"
+// 3. Класс “Умный ежедневник”
 // ----------------------------------------------------------------------
 class SmartDiary {
 public:
@@ -240,10 +251,9 @@ public:
         int deadlineDay;
         int assignedDay;
         bool completed;
-        int priority;   // 0 - обычная, 1 - срочная
+        int priority;
     };
 
-    // Конструктор: инициализация из шаблона интервалов на неделю
     SmartDiary(const Date& start, const Date& end,
         double alpha, double beta, double maxE, double initialE,
         const std::vector<std::vector<Interval>>& weekTemplate)
@@ -264,12 +274,11 @@ public:
             Date d = addDays(startDate_, i);
             dates_[i] = d;
             std::tm t = makeDate(d.year, d.month, d.day);
-            weekDays_[i] = t.tm_wday;   // 0=Вс
+            weekDays_[i] = t.tm_wday;
             if (!weekTemplate.empty()) {
                 int wd = weekDays_[i];
                 if (wd >= 0 && wd < 7) {
-                    schedules_[i] = weekTemplate[wd]; // копируем интервалы
-                    // вычисляем сумму часов
+                    schedules_[i] = weekTemplate[wd];
                     double sum = 0;
                     for (const auto& inv : schedules_[i]) sum += (inv.end - inv.start);
                     baseLoad_[i] = sum;
@@ -278,15 +287,12 @@ public:
         }
     }
 
-    // Получить параметры модели (для сохранения)
     double getAlpha() const { return alpha_; }
     double getBeta() const { return beta_; }
     double getMaxE() const { return maxE_; }
     double getInitialE() const { return initialE_; }
-    // Изменить начальную энергию (если понадобится в будущем)
     void setInitialEnergy(double e) { model_.setInitialEnergy(e); initialE_ = e; }
 
-    // Суммарная нагрузка (базовая + задачи)
     std::vector<double> getTotalLoad() const {
         std::vector<double> total(totalDays_);
         for (int i = 0; i < totalDays_; ++i)
@@ -298,18 +304,104 @@ public:
         return model_.predictFreeEnergy(getTotalLoad());
     }
 
-    // Добавить задачу
+    // Ищет первый свободный промежуток достаточной длины в дне
+    double findFreeSlot(int dayIndex, double requiredHours) {
+        const auto& intervals = schedules_[dayIndex];
+        if (intervals.empty()) {
+            double dayStart = 8.0;
+            if (requiredHours <= 20.0 - dayStart) return dayStart;
+            return -1;
+        }
+        std::vector<Interval> sorted = intervals;
+        std::sort(sorted.begin(), sorted.end(),
+            [](const Interval& a, const Interval& b) { return a.start < b.start; });
+
+        double dayStart = 8.0;
+        double dayEnd = 20.0;
+
+        if (sorted[0].start - dayStart >= requiredHours) return dayStart;
+        for (size_t i = 0; i < sorted.size() - 1; ++i) {
+            double gap = sorted[i + 1].start - sorted[i].end;
+            if (gap >= requiredHours) return sorted[i].end;
+        }
+        if (dayEnd - sorted.back().end >= requiredHours) return sorted.back().end;
+        return -1;
+    }
+
     bool addTask(const std::string& name, double hours, const Date& deadlineDate, int priority) {
         int deadlineIdx = dayIndex(deadlineDate);
         if (deadlineIdx < 0) {
             std::cout << "Дедлайн вне периода.\n";
             return false;
         }
-        int bestDay = model_.suggestOptimalDay(hours, deadlineIdx, getTotalLoad(), priority);
+        auto totalLoad = getTotalLoad();
+        int bestDay = model_.suggestOptimalDay(hours, deadlineIdx, totalLoad, priority);
         if (bestDay < 0) {
             std::cout << "Невозможно добавить задачу без критического истощения.\n";
             return false;
         }
+
+        // Показываем предложение
+        std::cout << "Рекомендуемый день: " << dateToString(dates_[bestDay])
+            << " (" << dayOfWeekShortName(weekDays_[bestDay]) << ")\n";
+        double slotStart = findFreeSlot(bestDay, hours);
+        if (slotStart >= 0) {
+            int h = (int)slotStart, m = (int)((slotStart - h) * 60);
+            int endH = (int)(slotStart + hours), endM = (int)(((slotStart + hours) - endH) * 60);
+            std::cout << "Свободное окно: "
+                << std::setw(2) << std::setfill('0') << h << ":"
+                << std::setw(2) << std::setfill('0') << m << " – "
+                << std::setw(2) << std::setfill('0') << endH << ":"
+                << std::setw(2) << std::setfill('0') << endM << "\n";
+        }
+        else {
+            std::cout << "В этом дне нет непрерывного свободного окна под " << hours << " ч.\n";
+        }
+
+        std::cout << "Поставить задачу на этот день? (y/n): ";
+        char ans;
+        std::cin >> ans;
+        std::cin.ignore();
+        if (ans != 'y' && ans != 'Y') {
+            std::cout << "Хотите выбрать другой день вручную? (y/n): ";
+            char ans2;
+            std::cin >> ans2;
+            std::cin.ignore();
+            if (ans2 == 'y' || ans2 == 'Y') {
+                std::vector<int> suitableDays;
+                for (int d = 0; d <= deadlineIdx; ++d) {
+                    auto testLoad = totalLoad;
+                    testLoad[d] += hours;
+                    double backup = model_.getCurrentEnergy();
+                    auto energy = model_.predictFreeEnergy(testLoad);
+                    model_.setInitialEnergy(backup);
+                    bool ok = true;
+                    for (double e : energy) if (e < 0.1 * model_.getMaxEnergy()) { ok = false; break; }
+                    if (ok) suitableDays.push_back(d);
+                }
+                if (suitableDays.empty()) {
+                    std::cout << "Нет других подходящих дней.\n";
+                    return false;
+                }
+                std::cout << "Подходящие дни:\n";
+                for (int d : suitableDays)
+                    std::cout << "  " << d << " - " << dateToString(dates_[d]) << "\n";
+                std::cout << "Введите индекс дня: ";
+                int chosen;
+                std::cin >> chosen;
+                std::cin.ignore();
+                if (std::find(suitableDays.begin(), suitableDays.end(), chosen) == suitableDays.end()) {
+                    std::cout << "Недопустимый день. Операция отменена.\n";
+                    return false;
+                }
+                bestDay = chosen;
+            }
+            else {
+                std::cout << "Добавление задачи отменено.\n";
+                return false;
+            }
+        }
+
         Task task;
         task.name = name;
         task.hours = hours;
@@ -321,11 +413,10 @@ public:
         addedLoad_[bestDay] += hours;
         std::cout << "Задача \"" << name << "\" назначена на "
             << dateToString(dates_[bestDay])
-            << " (" << dayOfWeekShortName(weekDays_[bestDay]) << ")\n";
+            << " (" << dayOfWeekShortName(weekDays_[bestDay]) << ").\n";
         return true;
     }
 
-    // Показать всю таблицу
     void printCalendar() {
         auto energy = getEnergyForecast();
         auto totalLoad = getTotalLoad();
@@ -348,21 +439,16 @@ public:
         }
     }
 
-    // Просмотр одной недели по дате
     void printWeek() {
         std::cout << "Введите любую дату из интересующей недели (дд мм): ";
-        int d, m;
-        std::cin >> d >> m;
-        std::cin.ignore();
-        Date any = { 2026, m, d };
+        Date any = inputDate();
         int idx = dayIndex(any);
         if (idx < 0) {
             std::cout << "Дата вне периода.\n";
             return;
         }
-        // ищем понедельник (1) для weekDays_[idx]; tm_wday: 0=Вс,1=Пн,...,6=Сб
-        int diff = weekDays_[idx] - 1; // если wday=1 (Пн), diff=0
-        if (diff < 0) diff += 7; // для Вс (0) -> (0-1)+7 = 6
+        int diff = weekDays_[idx] - 1;
+        if (diff < 0) diff += 7;
         int monIdx = idx - diff;
         if (monIdx < 0) monIdx = 0;
         int sunIdx = monIdx + 6;
@@ -383,7 +469,6 @@ public:
                     std::cout << "   " << buf << " " << inv.desc << "\n";
                 }
             }
-            // также показываем добавленные задачи, если есть
             double added = addedLoad_[i];
             if (added > 0) {
                 std::cout << "   + задачи (" << added << " ч)\n";
@@ -391,13 +476,9 @@ public:
         }
     }
 
-    // Редактирование дня: добавить/удалить интервал
     void editDay() {
         std::cout << "Введите дату для редактирования (дд мм): ";
-        int d, m;
-        std::cin >> d >> m;
-        std::cin.ignore();
-        Date date = { 2026, m, d };
+        Date date = inputDate();
         int idx = dayIndex(date);
         if (idx < 0) {
             std::cout << "Дата вне периода.\n";
@@ -417,69 +498,75 @@ public:
                 std::cout << "  [" << i << "] " << buf << " " << intervals[i].desc << "\n";
             }
         }
-        std::cout << "Добавить (a) или удалить (d) интервал? (a/d): ";
-        char act;
-        std::cin >> act;
-        std::cin.ignore();
-        if (act == 'a') {
-            std::cout << "Введите интервал (чч:мм-чч:мм описание): ";
-            std::string line;
-            std::getline(std::cin, line);
-            size_t dash = line.find('-');
-            if (dash == std::string::npos) {
-                std::cout << "Неверный формат.\n"; return;
+
+        while (true) {
+            std::cout << "Добавить (a), удалить (d) или отмена (c)? (a/d/c): ";
+            char act;
+            std::cin >> act;
+            std::cin.ignore();
+            if (act == 'c' || act == 'C') {
+                std::cout << "Изменения отменены.\n";
+                return;
             }
-            std::string startS = line.substr(0, dash);
-            std::string rest = line.substr(dash + 1);
-            size_t space = rest.find(' ');
-            std::string endS, desc;
-            if (space == std::string::npos) {
-                endS = rest;
-                desc = "";
+            else if (act == 'a') {
+                std::cout << "Введите интервал (чч:мм-чч:мм описание): ";
+                std::string line;
+                std::getline(std::cin, line);
+                size_t dash = line.find('-');
+                if (dash == std::string::npos) {
+                    std::cout << "Неверный формат.\n"; return;
+                }
+                std::string startS = line.substr(0, dash);
+                std::string rest = line.substr(dash + 1);
+                size_t space = rest.find(' ');
+                std::string endS, desc;
+                if (space == std::string::npos) {
+                    endS = rest;
+                    desc = "";
+                }
+                else {
+                    endS = rest.substr(0, space);
+                    desc = rest.substr(space + 1);
+                    desc.erase(0, desc.find_first_not_of(" \t"));
+                }
+                try {
+                    double s = timeToHours(startS);
+                    double e = timeToHours(endS);
+                    if (e <= s || s < 0 || e > 24) throw std::runtime_error("Invalid");
+                    intervals.push_back({ s, e, desc });
+                    baseLoad_[idx] = 0;
+                    for (const auto& inv : intervals) baseLoad_[idx] += (inv.end - inv.start);
+                    std::cout << "Интервал добавлен.\n";
+                }
+                catch (...) {
+                    std::cout << "Ошибка времени.\n";
+                }
+                return;
             }
-            else {
-                endS = rest.substr(0, space);
-                desc = rest.substr(space + 1);
-                desc.erase(0, desc.find_first_not_of(" \t"));
-            }
-            try {
-                double s = timeToHours(startS);
-                double e = timeToHours(endS);
-                if (e <= s || s < 0 || e > 24) throw std::runtime_error("Invalid");
-                intervals.push_back({ s, e, desc });
-                // пересчитать baseLoad_
+            else if (act == 'd') {
+                int num;
+                std::cout << "Номер интервала для удаления: ";
+                std::cin >> num;
+                std::cin.ignore();
+                if (num < 0 || num >= static_cast<int>(intervals.size())) {
+                    std::cout << "Неверный номер.\n"; return;
+                }
+                intervals.erase(intervals.begin() + num);
                 baseLoad_[idx] = 0;
                 for (const auto& inv : intervals) baseLoad_[idx] += (inv.end - inv.start);
-                std::cout << "Интервал добавлен.\n";
+                std::cout << "Интервал удалён.\n";
+                return;
             }
-            catch (...) {
-                std::cout << "Ошибка времени.\n";
+            else {
+                std::cout << "Неверная команда.\n";
             }
-        }
-        else if (act == 'd') {
-            int num;
-            std::cout << "Номер интервала для удаления: ";
-            std::cin >> num;
-            std::cin.ignore();
-            if (num < 0 || num >= static_cast<int>(intervals.size())) {
-                std::cout << "Неверный номер.\n"; return;
-            }
-            intervals.erase(intervals.begin() + num);
-            baseLoad_[idx] = 0;
-            for (const auto& inv : intervals) baseLoad_[idx] += (inv.end - inv.start);
-            std::cout << "Интервал удалён.\n";
-        }
-        else {
-            std::cout << "Неизвестное действие.\n";
         }
     }
 
-    // Сохранение
     void saveToFile(const std::string& filename) const {
         std::ofstream f(filename);
         if (!f) { std::cerr << "Ошибка записи файла\n"; return; }
         f << alpha_ << "\n" << beta_ << "\n" << maxE_ << "\n" << initialE_ << "\n";
-        // интервалы для каждого дня
         f << totalDays_ << "\n";
         for (int i = 0; i < totalDays_; ++i) {
             f << schedules_[i].size() << "\n";
@@ -487,7 +574,6 @@ public:
                 f << inv.start << " " << inv.end << " " << inv.desc << "\n";
             }
         }
-        // задачи
         f << tasks_.size() << "\n";
         for (const auto& t : tasks_) {
             f << t.name << "\n"
@@ -500,7 +586,6 @@ public:
         std::cout << "Сохранено в " << filename << "\n";
     }
 
-    // Статический метод загрузки
     static SmartDiary loadFromFile(const std::string& filename,
         const Date& start, const Date& end) {
         std::ifstream f(filename);
@@ -508,7 +593,6 @@ public:
 
         double alpha, beta, maxE, initialE;
         f >> alpha >> beta >> maxE >> initialE;
-        // временный пустой шаблон, заполним потом
         std::vector<std::vector<Interval>> weekTemplate(7);
         SmartDiary diary(start, end, alpha, beta, maxE, initialE, weekTemplate);
 
@@ -524,7 +608,7 @@ public:
                 double s, e;
                 std::string desc;
                 f >> s >> e;
-                std::getline(f >> std::ws, desc); // остаток строки (может быть пустым)
+                std::getline(f >> std::ws, desc);
                 dayIntervals.push_back({ s, e, desc });
             }
             diary.schedules_[i] = dayIntervals;
@@ -532,7 +616,6 @@ public:
             for (auto& inv : diary.schedules_[i]) sum += inv.end - inv.start;
             diary.baseLoad_[i] = sum;
         }
-        // задачи
         int numTasks;
         f >> numTasks;
         f.ignore();
@@ -557,8 +640,6 @@ private:
     std::vector<double> baseLoad_;
     std::vector<double> addedLoad_;
     std::vector<Task> tasks_;
-
-    // сохранённые параметры модели (для доступа без лишних геттеров)
     double alpha_, beta_, maxE_, initialE_;
 
     static int daysBetween(const Date& from, const Date& to) {
@@ -595,7 +676,7 @@ int main() {
 
     std::cout << "=== УМНЫЙ ЕЖЕДНЕВНИК (01.05.2026 – 01.07.2026) ===\n";
 
-    std::unique_ptr<SmartDiary> diaryPtr;  // используем умный указатель для автоматического удаления
+    std::unique_ptr<SmartDiary> diaryPtr;
     double alpha, beta, maxE, initialE;
 
     // Проверка сохранения
@@ -606,7 +687,6 @@ int main() {
         if (!ans.empty() && std::tolower(static_cast<unsigned char>(ans[0])) == 'y') {
             try {
                 diaryPtr.reset(new SmartDiary(SmartDiary::loadFromFile(saveFile, startDate, endDate)));
-                // получим параметры из загруженного дневника
                 alpha = diaryPtr->getAlpha();
                 beta = diaryPtr->getBeta();
                 maxE = diaryPtr->getMaxE();
@@ -614,7 +694,13 @@ int main() {
                 std::cout << "Загружено.\n";
             }
             catch (const std::exception& e) {
-                std::cout << "Ошибка загрузки: " << e.what() << "\nНачинаем заново.\n";
+                std::cerr << "Ошибка загрузки: " << e.what() << "\n";
+                // Переименовываем проблемный файл, чтобы можно было начать заново
+                if (std::rename(saveFile.c_str(), (saveFile + ".bak").c_str()) == 0)
+                    std::cout << "Старый файл сохранён как " << saveFile << ".bak\n";
+                else
+                    std::remove(saveFile.c_str());
+                std::cout << "Начинаем чистую настройку.\n";
                 diaryPtr.reset();
             }
         }
@@ -649,7 +735,12 @@ int main() {
             << "5. Сохранить\n"
             << "0. Выход\n"
             << ">>> ";
-        std::cin >> choice;
+        if (!(std::cin >> choice)) {
+            std::cin.clear();
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cout << "Введите число.\n";
+            continue;
+        }
         std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
         switch (choice) {

@@ -1,9 +1,7 @@
-﻿// Умный ежедневник с моделью энергии (дифф. уравнение),
-// редактируемым расписанием и приоритетами задач.
-// Компиляция: C++17 (Visual Studio: /std:c++17)
-
+﻿#define NOMINMAX
+#include <windows.h>
+#pragma execution_character_set("utf-8")
 #include <iostream>
-//#include <windows.h> 
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -156,15 +154,15 @@ public:
 
     int suggestOptimalDay(double taskLoadHours, int deadlineDay,
         const std::vector<double>& plannedLoad,
-        int priority = 0) {
-        if (deadlineDay < 0 || deadlineDay >= static_cast<int>(plannedLoad.size()))
-            throw std::out_of_range("deadlineDay out of range");
+        int currentDay, int priority = 0) {
+        if (deadlineDay < currentDay || deadlineDay >= static_cast<int>(plannedLoad.size()))
+            throw std::out_of_range("deadlineDay out of range or past");
 
         double bestMetric = -1e9;
         int bestDay = -1;
         const double minEnergyThreshold = 0.1 * E_max_;
 
-        for (int day = 0; day <= deadlineDay; ++day) {
+        for (int day = currentDay; day <= deadlineDay; ++day) {
             std::vector<double> modifiedLoad = plannedLoad;
             modifiedLoad[day] += taskLoadHours;
             double backupE = E_current_;
@@ -238,7 +236,7 @@ Date inputDate() {
 }
 
 // ----------------------------------------------------------------------
-// 3. Класс “Умный ежедневник”
+// 3. Класс "Умный ежедневник"
 // ----------------------------------------------------------------------
 class SmartDiary {
 public:
@@ -249,7 +247,7 @@ public:
         int assignedDay;
         bool completed;
         int priority;
-        double startTime; // в часах, если hasTime == true
+        double startTime;
         bool hasTime;
     };
 
@@ -259,7 +257,8 @@ public:
         : model_(alpha, beta, maxE),
         startDate_(start),
         endDate_(end),
-        alpha_(alpha), beta_(beta), maxE_(maxE), initialE_(initialE)
+        alpha_(alpha), beta_(beta), maxE_(maxE), initialE_(initialE),
+        currentDayIndex_(0)
     {
         model_.setInitialEnergy(initialE);
         totalDays_ = daysBetween(start, end) + 1;
@@ -292,6 +291,21 @@ public:
     double getInitialE() const { return initialE_; }
     void setInitialEnergy(double e) { model_.setInitialEnergy(e); initialE_ = e; }
 
+    void setCurrentDay(int dayIndex, double energyNow) {
+        if (dayIndex < 0 || dayIndex >= totalDays_) throw std::out_of_range("Invalid day index");
+        currentDayIndex_ = dayIndex;
+        model_.setInitialEnergy(energyNow);
+        initialE_ = energyNow;
+    }
+    int getCurrentDayIndex() const { return currentDayIndex_; }
+
+    int dayIndex(const Date& d) const {
+        for (int i = 0; i < totalDays_; ++i)
+            if (dates_[i].year == d.year && dates_[i].month == d.month && dates_[i].day == d.day)
+                return i;
+        return -1;
+    }
+
     std::vector<double> getTotalLoad() const {
         std::vector<double> total(totalDays_);
         for (int i = 0; i < totalDays_; ++i)
@@ -303,7 +317,6 @@ public:
         return model_.predictFreeEnergy(getTotalLoad());
     }
 
-    // Собрать все занятые промежутки в дне (расписание + задачи с временем)
     std::vector<Interval> getOccupiedIntervals(int dayIndex) const {
         std::vector<Interval> occupied = schedules_[dayIndex];
         for (const auto& t : tasks_) {
@@ -316,7 +329,6 @@ public:
         return occupied;
     }
 
-    // Ищет первый свободный промежуток достаточной длины в дне
     double findFreeSlot(int dayIndex, double requiredHours) {
         auto occupied = getOccupiedIntervals(dayIndex);
         if (occupied.empty()) {
@@ -336,7 +348,6 @@ public:
         return -1;
     }
 
-    // Проверка, свободен ли промежуток [start, start+duration] в дне
     bool isIntervalFree(int dayIndex, double start, double duration) {
         auto occupied = getOccupiedIntervals(dayIndex);
         double end = start + duration;
@@ -352,20 +363,21 @@ public:
             std::cout << "Дедлайн вне периода.\n";
             return false;
         }
+        if (deadlineIdx < currentDayIndex_) {
+            std::cout << "Дедлайн уже прошёл.\n";
+            return false;
+        }
         auto totalLoad = getTotalLoad();
-        int bestDay = model_.suggestOptimalDay(hours, deadlineIdx, totalLoad, priority);
+        int bestDay = model_.suggestOptimalDay(hours, deadlineIdx, totalLoad, currentDayIndex_, priority);
         if (bestDay < 0) {
             std::cout << "Невозможно добавить задачу без критического истощения.\n";
             return false;
         }
 
-        // Определяем окончательный день
-        bool dayConfirmed = false;
-        while (!dayConfirmed) {
+        while (true) {
             std::cout << "Рекомендуемый день: " << dateToString(dates_[bestDay])
                 << " (" << dayOfWeekShortName(weekDays_[bestDay]) << ")\n";
 
-            // Ищем свободное окно
             double slotStart = findFreeSlot(bestDay, hours);
             if (slotStart >= 0) {
                 char buf[64];
@@ -378,7 +390,6 @@ public:
                 std::cin >> ans;
                 std::cin.ignore();
                 if (ans == 'y' || ans == 'Y') {
-                    // Всё хорошо, используем это время
                     Task task;
                     task.name = name;
                     task.hours = hours;
@@ -395,7 +406,7 @@ public:
                         << " в " << buf << ".\n";
                     return true;
                 }
-                // Отказ от предложенного времени
+
                 std::cout << "Хотите ввести время вручную? (y/n): ";
                 char ans2;
                 std::cin >> ans2;
@@ -408,8 +419,9 @@ public:
                         double manualStart = timeToHours(timeStr);
                         if (!isIntervalFree(bestDay, manualStart, hours)) {
                             std::cout << "Этот промежуток занят. Попробуйте другой день.\n";
-                            // Предложить выбор другого дня
-                            break; // выйдем из цикла дня, чтобы перевыбрать день
+                            bestDay = manualDaySelection(deadlineIdx, hours);
+                            if (bestDay < 0) return false;
+                            continue;
                         }
                         Task task;
                         task.name = name;
@@ -433,45 +445,19 @@ public:
                     }
                     catch (...) {
                         std::cout << "Неверный формат времени.\n";
-                        break;
                     }
                 }
-                // Пользователь не хочет ни предложенное, ни вручную – может, выберет другой день
+
                 std::cout << "Хотите выбрать другой день вручную? (y/n): ";
                 char ans3;
                 std::cin >> ans3;
                 std::cin.ignore();
                 if (ans3 == 'y' || ans3 == 'Y') {
-                    // Показываем подходящие дни
-                    std::vector<int> suitableDays;
-                    for (int d = 0; d <= deadlineIdx; ++d) {
-                        auto testLoad = totalLoad;
-                        testLoad[d] += hours;
-                        double backup = model_.getCurrentEnergy();
-                        auto energy = model_.predictFreeEnergy(testLoad);
-                        model_.setInitialEnergy(backup);
-                        bool ok = true;
-                        for (double e : energy) if (e < 0.1 * model_.getMaxEnergy()) { ok = false; break; }
-                        if (ok) suitableDays.push_back(d);
-                    }
-                    if (suitableDays.empty()) {
-                        std::cout << "Нет других подходящих дней.\n";
-                        return false;
-                    }
-                    std::cout << "Подходящие дни:\n";
-                    for (int d : suitableDays)
-                        std::cout << "  " << d << " - " << dateToString(dates_[d]) << "\n";
-                    std::cout << "Введите индекс дня: ";
-                    int chosen;
-                    std::cin >> chosen;
-                    std::cin.ignore();
-                    if (std::find(suitableDays.begin(), suitableDays.end(), chosen) == suitableDays.end()) {
-                        std::cout << "Недопустимый день. Операция отменена.\n";
-                        return false;
-                    }
-                    bestDay = chosen;
-                    continue; // повторяем для нового дня
+                    bestDay = manualDaySelection(deadlineIdx, hours);
+                    if (bestDay < 0) return false;
+                    continue;
                 }
+
                 std::cout << "Добавить задачу без указания времени (только нагрузка)? (y/n): ";
                 char ans4;
                 std::cin >> ans4;
@@ -495,7 +481,6 @@ public:
                 return false;
             }
             else {
-                // Нет свободного окна
                 std::cout << "В этом дне нет непрерывного свободного окна под " << hours << " ч.\n";
                 std::cout << "Хотите ввести время вручную? (y/n): ";
                 char ans;
@@ -509,8 +494,9 @@ public:
                         double manualStart = timeToHours(timeStr);
                         if (!isIntervalFree(bestDay, manualStart, hours)) {
                             std::cout << "Этот промежуток занят.\n";
-                            // возврат к выбору дня
-                            break;
+                            bestDay = manualDaySelection(deadlineIdx, hours);
+                            if (bestDay < 0) return false;
+                            continue;
                         }
                         Task task;
                         task.name = name;
@@ -534,45 +520,19 @@ public:
                     }
                     catch (...) {
                         std::cout << "Неверный формат времени.\n";
-                        break;
                     }
                 }
-                // Переход к выбору другого дня или добавление без времени
+
                 std::cout << "Выберите другой день вручную? (y/n): ";
                 char ans2;
                 std::cin >> ans2;
                 std::cin.ignore();
                 if (ans2 == 'y' || ans2 == 'Y') {
-                    // показываем подходящие дни
-                    std::vector<int> suitableDays;
-                    for (int d = 0; d <= deadlineIdx; ++d) {
-                        auto testLoad = totalLoad;
-                        testLoad[d] += hours;
-                        double backup = model_.getCurrentEnergy();
-                        auto energy = model_.predictFreeEnergy(testLoad);
-                        model_.setInitialEnergy(backup);
-                        bool ok = true;
-                        for (double e : energy) if (e < 0.1 * model_.getMaxEnergy()) { ok = false; break; }
-                        if (ok) suitableDays.push_back(d);
-                    }
-                    if (suitableDays.empty()) {
-                        std::cout << "Нет других подходящих дней.\n";
-                        return false;
-                    }
-                    std::cout << "Подходящие дни:\n";
-                    for (int d : suitableDays)
-                        std::cout << "  " << d << " - " << dateToString(dates_[d]) << "\n";
-                    std::cout << "Введите индекс дня: ";
-                    int chosen;
-                    std::cin >> chosen;
-                    std::cin.ignore();
-                    if (std::find(suitableDays.begin(), suitableDays.end(), chosen) == suitableDays.end()) {
-                        std::cout << "Недопустимый день. Операция отменена.\n";
-                        return false;
-                    }
-                    bestDay = chosen;
-                    continue; // повторяем для нового дня
+                    bestDay = manualDaySelection(deadlineIdx, hours);
+                    if (bestDay < 0) return false;
+                    continue;
                 }
+
                 std::cout << "Добавить задачу без указания времени (только нагрузка)? (y/n): ";
                 char ans3;
                 std::cin >> ans3;
@@ -595,48 +555,7 @@ public:
                 std::cout << "Добавление задачи отменено.\n";
                 return false;
             }
-            // Если мы здесь, значит пользователь не выбрал время и хочет сменить день
-            // Но цикл dayConfirmed не меняется, поэтому надо просто прерваться и предложить другой день
-            std::cout << "Хотите выбрать другой день? (y/n): ";
-            char ch;
-            std::cin >> ch;
-            std::cin.ignore();
-            if (ch == 'y' || ch == 'Y') {
-                // показываем подходящие
-                std::vector<int> suitableDays;
-                for (int d = 0; d <= deadlineIdx; ++d) {
-                    auto testLoad = totalLoad;
-                    testLoad[d] += hours;
-                    double backup = model_.getCurrentEnergy();
-                    auto energy = model_.predictFreeEnergy(testLoad);
-                    model_.setInitialEnergy(backup);
-                    bool ok = true;
-                    for (double e : energy) if (e < 0.1 * model_.getMaxEnergy()) { ok = false; break; }
-                    if (ok) suitableDays.push_back(d);
-                }
-                if (suitableDays.empty()) {
-                    std::cout << "Нет других подходящих дней.\n";
-                    return false;
-                }
-                std::cout << "Подходящие дни:\n";
-                for (int d : suitableDays)
-                    std::cout << "  " << d << " - " << dateToString(dates_[d]) << "\n";
-                std::cout << "Введите индекс дня: ";
-                int chosen;
-                std::cin >> chosen;
-                std::cin.ignore();
-                if (std::find(suitableDays.begin(), suitableDays.end(), chosen) == suitableDays.end()) {
-                    std::cout << "Недопустимый день. Операция отменена.\n";
-                    return false;
-                }
-                bestDay = chosen;
-                continue;
-            }
-            // Если не хочет другой день, отменяем
-            std::cout << "Добавление задачи отменено.\n";
-            return false;
         }
-        return false;
     }
 
     void printCalendar() {
@@ -691,12 +610,7 @@ public:
         std::cout << "Неделя " << dateToString(dates_[monIdx]) << " - " << dateToString(dates_[sunIdx]) << ":\n\n";
         for (int i = monIdx; i <= sunIdx; ++i) {
             std::cout << dateToString(dates_[i]) << " (" << dayOfWeekShortName(weekDays_[i]) << "):\n";
-            if (schedules_[i].empty() && addedLoad_[i] == 0) {
-                std::cout << "   свободен\n";
-                continue;
-            }
-            // Выводим интервалы расписания и задачи с временем
-            auto occupied = getOccupiedIntervals(i); // уже включает задачи с временем
+            auto occupied = getOccupiedIntervals(i);
             if (occupied.empty()) {
                 std::cout << "   свободен\n";
             }
@@ -709,7 +623,6 @@ public:
                     std::cout << "   " << buf << " " << inv.desc << "\n";
                 }
             }
-            // Нагрузка от задач без времени
             double noTimeLoad = addedLoad_[i];
             for (const auto& t : tasks_) {
                 if (t.assignedDay == i && t.hasTime) noTimeLoad -= t.hours;
@@ -864,13 +777,13 @@ public:
         }
         int numTasks;
         f >> numTasks;
-        f.ignore();
+        f.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
         for (int i = 0; i < numTasks; ++i) {
             Task t;
             std::getline(f, t.name);
             f >> t.hours >> t.deadlineDay >> t.assignedDay >> t.completed >> t.priority;
-            // читаем новые поля, если они есть (может отсутствовать в старых файлах)
-            if (f.peek() != EOF) {
+            f >> std::ws;
+            if (f.peek() == '0' || f.peek() == '1') {
                 f >> t.hasTime;
                 if (t.hasTime) {
                     f >> t.startTime;
@@ -883,7 +796,7 @@ public:
                 t.hasTime = false;
                 t.startTime = 0;
             }
-            f.ignore();
+            f.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
             diary.tasks_.push_back(t);
             diary.addedLoad_[t.assignedDay] += t.hours;
         }
@@ -894,7 +807,6 @@ private:
     EnergyModel model_;
     Date startDate_, endDate_;
     int totalDays_;
-    int currentDayIndex_ = 0; // индекс дня "сегодня"
     std::vector<Date> dates_;
     std::vector<int> weekDays_;
     std::vector<std::vector<Interval>> schedules_;
@@ -902,6 +814,7 @@ private:
     std::vector<double> addedLoad_;
     std::vector<Task> tasks_;
     double alpha_, beta_, maxE_, initialE_;
+    int currentDayIndex_;
 
     static int daysBetween(const Date& from, const Date& to) {
         std::tm t1 = makeDate(from.year, from.month, from.day);
@@ -918,11 +831,35 @@ private:
         return { t.tm_year + 1900, t.tm_mon + 1, t.tm_mday };
     }
 
-    int dayIndex(const Date& d) const {
-        for (int i = 0; i < totalDays_; ++i)
-            if (dates_[i].year == d.year && dates_[i].month == d.month && dates_[i].day == d.day)
-                return i;
-        return -1;
+    int manualDaySelection(int deadlineIdx, double hours) {
+        auto totalLoad = getTotalLoad();
+        std::vector<int> suitableDays;
+        for (int d = currentDayIndex_; d <= deadlineIdx; ++d) {
+            auto testLoad = totalLoad;
+            testLoad[d] += hours;
+            double backup = model_.getCurrentEnergy();
+            auto energy = model_.predictFreeEnergy(testLoad);
+            model_.setInitialEnergy(backup);
+            bool ok = true;
+            for (double e : energy) if (e < 0.1 * model_.getMaxEnergy()) { ok = false; break; }
+            if (ok) suitableDays.push_back(d);
+        }
+        if (suitableDays.empty()) {
+            std::cout << "Нет подходящих дней.\n";
+            return -1;
+        }
+        std::cout << "Подходящие дни:\n";
+        for (int d : suitableDays)
+            std::cout << "  " << d << " - " << dateToString(dates_[d]) << "\n";
+        std::cout << "Введите индекс дня: ";
+        int chosen;
+        std::cin >> chosen;
+        std::cin.ignore();
+        if (std::find(suitableDays.begin(), suitableDays.end(), chosen) == suitableDays.end()) {
+            std::cout << "Недопустимый день.\n";
+            return -1;
+        }
+        return chosen;
     }
 };
 
@@ -930,8 +867,10 @@ private:
 // Главное меню
 // ----------------------------------------------------------------------
 int main() {
-    system("chcp 65001 > nul");
-    setlocale(LC_ALL, "ru");
+    SetConsoleCP(65001);
+    SetConsoleOutputCP(65001);
+    //setlocale(LC_ALL, "ru");
+
     Date startDate = { 2026, 5, 1 };
     Date endDate = { 2026, 7, 1 };
     const std::string saveFile = "diary_data.txt";
@@ -984,6 +923,26 @@ int main() {
     }
 
     SmartDiary& diary = *diaryPtr;
+
+    std::cout << "\nКакая сегодня дата? (день месяц, например 4 5, или Enter для 1 5): ";
+    std::string todayInput;
+    std::getline(std::cin, todayInput);
+    int todayD = 1, todayM = 5;
+    if (!todayInput.empty()) {
+        std::istringstream iss(todayInput);
+        if (iss >> todayD >> todayM) {}
+        else { std::cout << "Неверный ввод, оставлено 1 мая.\n"; }
+    }
+    Date todayDate = { 2026, todayM, todayD };
+    int tIndex = diary.dayIndex(todayDate);
+    if (tIndex < 0) {
+        std::cout << "Дата вне периода, оставлен 1 мая.\n";
+        tIndex = diary.dayIndex({ 2026,5,1 });
+    }
+    double energyNow = inputDouble("Текущая свободная энергия (0-" + std::to_string(diary.getMaxE()) + "): ");
+    diary.setCurrentDay(tIndex, energyNow);
+    std::cout << "Сегодня установлено: " << dateToString(todayDate)
+        << ", индекс " << tIndex << ", энергия " << energyNow << "\n";
 
     int choice;
     do {
